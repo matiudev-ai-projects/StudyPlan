@@ -77,6 +77,23 @@ function getTodaySnapshot() {
   return snap.presentedIds;
 }
 
+// ---------------- SETTINGS ----------------
+
+const SETTINGS_KEY = "studyplan_settings";
+
+export const getSettings = () => {
+  try {
+    return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || { hours_per_day: 2 };
+  } catch {
+    return { hours_per_day: 2 };
+  }
+};
+
+export const setSettings = (settings) => {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  clearSnapshot();
+};
+
 // ---------------- EVALUATIONS ----------------
 
 export const getEvaluation = async (id) => {
@@ -153,7 +170,9 @@ export const updateEvaluation = async (id, payload) => {
   db.evaluations[i] = {
     ...existing,
     name: payload.name,
-    exam_date: payload.exam_date,
+    type: payload.type || "evaluation",
+    exam_date: payload.exam_date ?? null,
+    weeks_goal: payload.weeks_goal ?? null,
     hours_per_day: payload.hours_per_day,
     topics: updatedTopics,
   };
@@ -240,13 +259,101 @@ export const getPlan = async (extraHoursOverride = 0) => {
   const today = todayISO();
   const skippedDates = new Set(db.skippedDays.map((d) => d.date));
   const daysMap = {};
+  const globalHoursPerDay = getSettings().hours_per_day;
 
   const todayPresentedIds = getTodaySnapshot();
   // IDs nuevos que se generan hoy (base o extra) para guardar en snapshot
   const newTodayPresentedIds = [];
 
+  // ── PRE-PASS: asignar minutos por (fecha, evaluación) según urgencia ──
+  const dayEvalUrgency = {};
   db.evaluations.forEach((ev) => {
-    const allDays = daysBetween(today, ev.exam_date);
+    const isProject = ev.type === "project";
+    let effectiveEndDate = ev.exam_date;
+    if (isProject) {
+      const end = new Date(today);
+      end.setDate(end.getDate() + (ev.weeks_goal || 4) * 7);
+      effectiveEndDate = end.toISOString().slice(0, 10);
+    }
+    if (!effectiveEndDate) return;
+    const preAllDays = daysBetween(today, effectiveEndDate);
+    const preActiveDays = preAllDays.filter((d) => !skippedDates.has(d));
+    if (!preActiveDays.length || !ev.topics.length) return;
+    const total = preActiveDays.length;
+    preActiveDays.forEach((date, i) => {
+      const urgency = 1 / Math.max(1, total - i);
+      if (!dayEvalUrgency[date]) dayEvalUrgency[date] = [];
+      dayEvalUrgency[date].push({ eval_id: ev.id, urgency });
+    });
+  });
+
+  // Minutos pendientes totales por evaluación (para redistribuir excedentes)
+  const evalPendingMins = {};
+  db.evaluations.forEach((ev) => {
+    let mins = 0;
+    ev.topics.forEach((topic) => {
+      if (topic.subtopics?.length > 0) {
+        topic.subtopics.forEach((sub) => {
+          if (!sub.completed) mins += topicMinutes(topic.difficulty);
+        });
+      } else {
+        if (!topic.completed) mins += topicMinutes(topic.difficulty);
+      }
+    });
+    evalPendingMins[ev.id] = mins;
+  });
+
+  const allocations = {};
+  Object.entries(dayEvalUrgency).forEach(([date, evals]) => {
+    const totalUrgency = evals.reduce((s, e) => s + e.urgency, 0);
+    const totalMinutes =
+      date === today
+        ? (globalHoursPerDay + extraHoursOverride) * 60
+        : globalHoursPerDay * 60;
+
+    // Asignación base por urgencia
+    const alloc = {};
+    evals.forEach(({ eval_id, urgency }) => {
+      alloc[eval_id] = Math.round((urgency / totalUrgency) * totalMinutes);
+    });
+
+    // Capear en los minutos pendientes y redistribuir excedente
+    let excess = 0;
+    evals.forEach(({ eval_id }) => {
+      const pending = evalPendingMins[eval_id] || 0;
+      if (alloc[eval_id] > pending) {
+        excess += alloc[eval_id] - pending;
+        alloc[eval_id] = pending;
+      }
+    });
+    if (excess > 0) {
+      const absorbable = evals.filter(
+        ({ eval_id }) => (evalPendingMins[eval_id] || 0) > alloc[eval_id],
+      );
+      if (absorbable.length > 0) {
+        const absorbUrgency = absorbable.reduce((s, e) => s + e.urgency, 0);
+        absorbable.forEach(({ eval_id, urgency }) => {
+          const extra = Math.round((urgency / absorbUrgency) * excess);
+          const cap = (evalPendingMins[eval_id] || 0) - alloc[eval_id];
+          alloc[eval_id] += Math.min(extra, cap);
+        });
+      }
+    }
+
+    allocations[date] = alloc;
+  });
+
+  db.evaluations.forEach((ev) => {
+    const isProject = ev.type === "project";
+    let effectiveEndDate = ev.exam_date;
+    if (isProject) {
+      const end = new Date(today);
+      end.setDate(end.getDate() + (ev.weeks_goal || 4) * 7);
+      effectiveEndDate = end.toISOString().slice(0, 10);
+    }
+    if (!effectiveEndDate) return;
+
+    const allDays = daysBetween(today, effectiveEndDate);
     if (!allDays.length) return;
 
     const activeDays = allDays.filter((d) => !skippedDates.has(d));
@@ -323,13 +430,11 @@ export const getPlan = async (extraHoursOverride = 0) => {
       }
 
       const isToday = date === today;
-      const proximity =
-        totalActiveDays === 1 ? 1 : dayIndex / (totalActiveDays - 1);
+      const proximity = isProject
+        ? 0
+        : totalActiveDays === 1 ? 1 : dayIndex / (totalActiveDays - 1);
 
-      const hoursAvailable = isToday
-        ? ev.hours_per_day + extraHoursOverride
-        : ev.hours_per_day;
-      let minutesLeft = hoursAvailable * 60;
+      let minutesLeft = allocations[date]?.[ev.id] || 0;
 
       if (isToday) {
         if (todayPresentedIds) {
@@ -641,7 +746,9 @@ export const getStats = async () => {
     totalItems += evTotal;
     completedItems += evDone;
 
-    const daysLeft = daysBetween(today, ev.exam_date).length - 1;
+    const daysLeft = ev.type === "project"
+      ? (ev.weeks_goal || 4) * 7
+      : daysBetween(today, ev.exam_date).length - 1;
 
     return {
       id: ev.id,
@@ -674,6 +781,129 @@ export const getStats = async () => {
   };
 };
 
+// ---------------- WARNINGS ----------------
+
+export const getWarnings = () => {
+  const db = getDB();
+  const today = todayISO();
+  const skippedDates = new Set(db.skippedDays.map((d) => d.date));
+  const globalMinutesPerDay = getSettings().hours_per_day * 60;
+
+  const dayEvalUrgency = {};
+  db.evaluations.forEach((ev) => {
+    const isProject = ev.type === "project";
+    let effectiveEndDate = ev.exam_date;
+    if (isProject) {
+      const end = new Date(today);
+      end.setDate(end.getDate() + (ev.weeks_goal || 4) * 7);
+      effectiveEndDate = end.toISOString().slice(0, 10);
+    }
+    if (!effectiveEndDate || effectiveEndDate < today) return;
+    const allDays = daysBetween(today, effectiveEndDate);
+    const activeDays = allDays.filter((d) => !skippedDates.has(d));
+    if (!activeDays.length || !ev.topics.length) return;
+    const total = activeDays.length;
+    activeDays.forEach((date, i) => {
+      const urgency = 1 / Math.max(1, total - i);
+      if (!dayEvalUrgency[date]) dayEvalUrgency[date] = [];
+      dayEvalUrgency[date].push({ eval_id: ev.id, urgency });
+    });
+  });
+
+  const evalAllocated = {};
+  Object.entries(dayEvalUrgency).forEach(([, evals]) => {
+    const totalUrgency = evals.reduce((s, e) => s + e.urgency, 0);
+    evals.forEach(({ eval_id, urgency }) => {
+      const mins = Math.round((urgency / totalUrgency) * globalMinutesPerDay);
+      evalAllocated[eval_id] = (evalAllocated[eval_id] || 0) + mins;
+    });
+  });
+
+  const warnings = [];
+  db.evaluations.forEach((ev) => {
+    const isProject = ev.type === "project";
+    let effectiveEndDate = ev.exam_date;
+    if (isProject) {
+      const end = new Date(today);
+      end.setDate(end.getDate() + (ev.weeks_goal || 4) * 7);
+      effectiveEndDate = end.toISOString().slice(0, 10);
+    }
+    if (!effectiveEndDate || effectiveEndDate < today) return;
+
+    let pendingMinutes = 0;
+    ev.topics.forEach((topic) => {
+      if (topic.subtopics?.length > 0) {
+        topic.subtopics.forEach((sub) => {
+          if (!sub.completed) pendingMinutes += topicMinutes(topic.difficulty);
+        });
+      } else {
+        if (!topic.completed) pendingMinutes += topicMinutes(topic.difficulty);
+      }
+    });
+    if (pendingMinutes === 0) return;
+
+    const allocated = evalAllocated[ev.id] || 0;
+    if (pendingMinutes > allocated) {
+      warnings.push({
+        eval_id: ev.id,
+        eval_name: ev.name,
+        pending_minutes: pendingMinutes,
+        allocated_minutes: allocated,
+        shortfall_hours: Math.ceil((pendingMinutes - allocated) / 60),
+      });
+    }
+  });
+
+  return warnings;
+};
+
+// ---------------- EXPORT / IMPORT ----------------
+
+export const exportData = () => {
+  const raw = localStorage.getItem(DB_KEY);
+  const studyplanData = raw ? JSON.parse(raw) : { evaluations: [], skippedDays: [] };
+
+  const extraHours = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith("extra_hours_")) {
+      extraHours[key] = localStorage.getItem(key);
+    }
+  }
+
+  return {
+    version: 1,
+    exported_at: new Date().toISOString(),
+    studyplan_data: studyplanData,
+    settings: getSettings(),
+    extra_hours: extraHours,
+  };
+};
+
+export const importData = (data) => {
+  if (!data?.studyplan_data?.evaluations) throw new Error("Formato inválido");
+
+  localStorage.setItem(DB_KEY, JSON.stringify(data.studyplan_data));
+
+  const keysToRemove = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith("extra_hours_")) keysToRemove.push(key);
+  }
+  keysToRemove.forEach((k) => localStorage.removeItem(k));
+
+  if (data.extra_hours) {
+    Object.entries(data.extra_hours).forEach(([key, value]) => {
+      localStorage.setItem(key, value);
+    });
+  }
+
+  if (data.settings) {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(data.settings));
+  }
+  clearSnapshot();
+};
+
 // ---------------- EXTRA HOURS ----------------
 
 export const getExtraHours = (date) => {
@@ -684,6 +914,4 @@ export const getExtraHours = (date) => {
 export const setExtraHours = (date, hours) => {
   const key = `extra_hours_${date}`;
   localStorage.setItem(key, String(hours));
-  // Limpiar snapshot para que se regenere con las nuevas horas
-  if (date === todayISO()) clearSnapshot();
 };

@@ -3,14 +3,14 @@ import { useParams, Link, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
   CalendarClock,
-  Clock,
   Pencil,
   Trash2,
   CheckCircle2,
   Circle,
+  AlertTriangle,
 } from "lucide-react";
 import { toast } from "sonner";
-import { getEvaluation, toggleTopic, toggleSubtopic, deleteEvaluation } from "../lib/api";
+import { getEvaluation, toggleTopic, toggleSubtopic, deleteEvaluation, getWarnings } from "../lib/api";
 import { formatDate, daysBetween, todayISO } from "../lib/dateUtils";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -31,6 +31,7 @@ export default function EvaluationDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [ev, setEv] = useState(null);
+  const [warning, setWarning] = useState(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -41,6 +42,8 @@ export default function EvaluationDetail() {
       const data = await getEvaluation(id);
       if (!data) throw new Error("No encontrada");
       setEv(data);
+      const w = getWarnings().find((x) => x.eval_id === id);
+      setWarning(w || null);
     } catch {
       toast.error("Evaluación no encontrada");
     } finally {
@@ -115,7 +118,10 @@ export default function EvaluationDetail() {
     }
   });
   const percent = total ? Math.round((done / total) * 100) : 0;
-  const dleft = daysBetween(todayISO(), ev.exam_date).length - 1;
+  const isProject = ev.type === "project";
+  const dleft = isProject
+    ? (ev.weeks_goal || 4) * 7
+    : daysBetween(todayISO(), ev.exam_date).length - 1;
 
   return (
     <div className="space-y-8 sp-fade-in">
@@ -130,8 +136,8 @@ export default function EvaluationDetail() {
       <div className="sp-card p-6 sm:p-8">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <div className="text-xs uppercase tracking-[0.12em] text-emerald-600 font-medium">
-              Evaluación
+            <div className={`text-xs uppercase tracking-[0.12em] font-medium ${isProject ? "text-violet-600" : "text-emerald-600"}`}>
+              {isProject ? "Proyecto libre" : "Evaluación"}
             </div>
             <h1 className="font-heading text-3xl font-medium text-gray-900 mt-1">
               {ev.name}
@@ -139,20 +145,22 @@ export default function EvaluationDetail() {
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1 mt-3 text-sm text-gray-600">
               <span className="flex items-center gap-1.5">
                 <CalendarClock className="w-4 h-4 text-gray-400" />
-                {formatDate(ev.exam_date)}
-              </span>
-              <span className="flex items-center gap-1.5">
-                <Clock className="w-4 h-4 text-gray-400" />
-                {ev.hours_per_day} h/día
+                {isProject ? `${ev.weeks_goal || 4} semanas de plan` : formatDate(ev.exam_date)}
               </span>
               <span
                 className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                  dleft < 0
+                  isProject
+                    ? percent === 100
+                      ? "bg-emerald-50 text-emerald-700 border border-emerald-100"
+                      : "bg-violet-50 text-violet-700 border border-violet-100"
+                    : dleft < 0
                     ? "bg-gray-100 text-gray-500"
                     : "bg-emerald-50 text-emerald-700 border border-emerald-100"
                 }`}
               >
-                {dleft < 0
+                {isProject
+                  ? percent === 100 ? "Completado" : "En curso"
+                  : dleft < 0
                   ? "Finalizada"
                   : dleft === 0
                   ? "Hoy es el examen"
@@ -179,7 +187,18 @@ export default function EvaluationDetail() {
           </div>
         </div>
 
-        <div className="mt-6">
+        {warning && (
+          <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mt-4 text-sm text-amber-900">
+            <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+            <span>
+              <span className="font-medium">Horas insuficientes.</span>{" "}
+              Con las horas actuales, faltarían ~{warning.shortfall_hours}h para cubrir todos los temas antes de la fecha límite.
+              Aumentá las horas diarias desde la página de Hoy.
+            </span>
+          </div>
+        )}
+
+        <div className="mt-5">
           <div className="flex items-center justify-between text-sm text-gray-600 mb-2">
             <span>Progreso: {done} / {total} {total === 1 ? "ítem" : "ítems"}</span>
             <span className="font-medium text-gray-900">{percent}%</span>

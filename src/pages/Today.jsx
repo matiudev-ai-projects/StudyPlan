@@ -9,6 +9,8 @@ import {
   RefreshCcw,
   ArrowRight,
   RotateCcw,
+  AlertTriangle,
+  Pencil,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -21,6 +23,9 @@ import {
   listSkippedDays,
   getExtraHours,
   setExtraHours,
+  getSettings,
+  setSettings,
+  getWarnings,
 } from "../lib/api";
 import {
   formatDate,
@@ -39,6 +44,10 @@ export default function Today() {
   const [skipped, setSkipped] = useState(false);
   const [loading, setLoading] = useState(true);
   const [extraHours, setExtraHoursState] = useState(0);
+  const [globalHours, setGlobalHoursState] = useState(2);
+  const [warnings, setWarnings] = useState([]);
+  const [editingHours, setEditingHours] = useState(false);
+  const [hoursDraft, setHoursDraft] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -53,6 +62,9 @@ export default function Today() {
       setSkipped(sk.some((d) => d.date === todayISO()));
       const extra = getExtraHours(todayISO());
       setExtraHoursState(extra);
+      const settings = getSettings();
+      setGlobalHoursState(settings.hours_per_day);
+      setWarnings(getWarnings());
     } catch (e) {
       toast.error("No se pudo cargar el plan");
     } finally {
@@ -64,13 +76,21 @@ export default function Today() {
     load();
   }, [load]);
 
-  // Al cambiar horas extra NO se borra el snapshot — solo se guarda el nuevo valor
-  // y se recarga. getPlan se encarga de agregar temas extra al final del snapshot.
   const handleExtraHours = async (h) => {
     if (h === extraHours) return;
     setExtraHours(todayISO(), h);
     setExtraHoursState(h);
     await load();
+  };
+
+  const commitGlobalHours = async () => {
+    const n = parseFloat(hoursDraft);
+    if (!isNaN(n) && n >= 0.5 && n <= 24) {
+      setSettings({ hours_per_day: n });
+      setGlobalHoursState(n);
+      await load();
+    }
+    setEditingHours(false);
   };
 
   const handleToggle = async (eid, tid, sid) => {
@@ -149,52 +169,109 @@ export default function Today() {
         />
       </div>
 
+      {/* Warnings banner */}
+      {warnings.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex gap-3 items-start">
+          <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+          <div className="text-sm text-amber-900">
+            <div className="font-medium mb-1">
+              {warnings.length === 1
+                ? "Una evaluación no se puede cubrir con las horas actuales"
+                : `${warnings.length} evaluaciones no se pueden cubrir con las horas actuales`}
+            </div>
+            <ul className="space-y-0.5 text-amber-800">
+              {warnings.map((w) => (
+                <li key={w.eval_id}>
+                  · <span className="font-medium">{w.eval_name}</span>: necesitás ~{w.shortfall_hours}h más en total
+                </li>
+              ))}
+            </ul>
+            <div className="mt-1.5 text-xs text-amber-600">
+              Aumentá las horas diarias o reducí los temas para cubrir el plan.
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Today sessions */}
       <section>
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <div className="text-xs uppercase tracking-[0.12em] text-gray-400 font-medium">
-              {formatDayName(todayISO())} · {formatDate(todayISO())}
+        <div className="mb-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-xs uppercase tracking-[0.12em] text-gray-400 font-medium">
+                {formatDayName(todayISO())} · {formatDate(todayISO())}
+              </div>
+              <h2 className="font-heading text-2xl font-medium text-gray-900 mt-0.5">
+                Tu plan para hoy
+              </h2>
             </div>
-            <h2 className="font-heading text-2xl font-medium text-gray-900 mt-0.5">
-              Tu plan para hoy
-            </h2>
+            <Button
+              variant="ghost"
+              onClick={handleSkipToday}
+              data-testid="skip-today-btn"
+              className={skipped ? "text-emerald-700 hover:bg-emerald-50" : "text-gray-600"}
+            >
+              {skipped ? (
+                <>
+                  <RefreshCcw className="w-4 h-4 mr-1.5" />
+                  Reactivar día
+                </>
+              ) : (
+                <>
+                  <Ban className="w-4 h-4 mr-1.5" />
+                  No pude estudiar hoy
+                </>
+              )}
+            </Button>
           </div>
-          <Button
-            variant="ghost"
-            onClick={handleSkipToday}
-            data-testid="skip-today-btn"
-            className={
-              skipped ? "text-emerald-700 hover:bg-emerald-50" : "text-gray-600"
-            }
-          >
-            {skipped ? (
-              <>
-                <RefreshCcw className="w-4 h-4 mr-1.5" />
-                Reactivar día
-              </>
-            ) : (
-              <>
-                <Ban className="w-4 h-4 mr-1.5" />
-                No pude estudiar hoy
-              </>
-            )}
-          </Button>
-          <div className="flex items-center gap-2 text-sm text-gray-600">
-            <span>Horas extra hoy:</span>
-            {[0, 0.5, 1, 2, 3].map((h) => (
-              <button
-                key={h}
-                onClick={() => handleExtraHours(h)}
-                className={`px-2 py-1 rounded-md border text-xs font-medium transition-colors ${
-                  extraHours === h
-                    ? "bg-emerald-500 text-white border-emerald-500"
-                    : "border-gray-200 text-gray-600 hover:border-emerald-300"
-                }`}
-              >
-                {h === 0 ? "ninguna" : `+${h}h`}
-              </button>
-            ))}
+
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mt-3 text-sm text-gray-600">
+            {/* Global hours editor */}
+            <div className="flex items-center gap-1.5">
+              <span>Horas/día:</span>
+              {editingHours ? (
+                <input
+                  type="number"
+                  min="0.5"
+                  max="24"
+                  step="0.5"
+                  value={hoursDraft}
+                  onChange={(e) => setHoursDraft(e.target.value)}
+                  onBlur={commitGlobalHours}
+                  onKeyDown={(e) => e.key === "Enter" && commitGlobalHours()}
+                  className="w-16 text-center border border-emerald-300 rounded-md px-1.5 py-0.5 text-sm font-medium text-emerald-700 focus:outline-none focus:ring-1 focus:ring-emerald-400"
+                  autoFocus
+                />
+              ) : (
+                <button
+                  onClick={() => { setHoursDraft(String(globalHours)); setEditingHours(true); }}
+                  className="flex items-center gap-1 font-medium text-emerald-700 hover:text-emerald-800"
+                >
+                  {globalHours}h
+                  <Pencil className="w-3 h-3 text-gray-400" />
+                </button>
+              )}
+            </div>
+
+            <div className="w-px h-4 bg-gray-200 hidden sm:block" />
+
+            {/* Extra hours */}
+            <div className="flex items-center gap-2">
+              <span>Extra hoy:</span>
+              {[0, 0.5, 1, 2, 3].map((h) => (
+                <button
+                  key={h}
+                  onClick={() => handleExtraHours(h)}
+                  className={`px-2 py-1 rounded-md border text-xs font-medium transition-colors ${
+                    extraHours === h
+                      ? "bg-emerald-500 text-white border-emerald-500"
+                      : "border-gray-200 text-gray-600 hover:border-emerald-300"
+                  }`}
+                >
+                  {h === 0 ? "ninguna" : `+${h}h`}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 

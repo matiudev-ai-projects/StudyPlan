@@ -14,6 +14,7 @@ import CalendarPage from "./pages/CalendarPage";
 import Stats from "./pages/Stats";
 import EvaluationDetail from "./pages/EvaluationDetail";
 import ResetDataButton from "./components/ResetDataButton";
+import ExportImportData from "./components/ExportImportData";
 
 function Shell({ children }) {
   const navItems = [
@@ -61,7 +62,7 @@ function Shell({ children }) {
                 StudyPlan
               </div>
               <div className="text-[11px] text-gray-500 -mt-0.5">
-                Planificador inteligente
+                Planificador Inteligente
               </div>
             </div>
           </Link>
@@ -116,7 +117,10 @@ function Shell({ children }) {
 
       <footer className="max-w-6xl mx-auto px-6 sm:px-8 py-10 text-center text-xs text-gray-400">
         <div>StudyPlan · Planifica con calma, estudia con intención</div>
-        <ResetDataButton />
+        <div className="flex items-center justify-center flex-wrap gap-1 mt-2">
+          <ExportImportData />
+          <ResetDataButton />
+        </div>
       </footer>
     </div>
   );

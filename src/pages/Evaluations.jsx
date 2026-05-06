@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
-import { Plus, Pencil, Trash2, BookOpen, CalendarClock, Clock } from "lucide-react";
+import { Plus, Pencil, Trash2, BookOpen, CalendarClock, Layers, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
-import { listEvaluations, deleteEvaluation } from "../lib/api";
+import { listEvaluations, deleteEvaluation, getWarnings } from "../lib/api";
 import { formatDate, daysBetween, todayISO } from "../lib/dateUtils";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -21,6 +21,7 @@ import EmptyState from "../components/EmptyState";
 
 export default function Evaluations() {
   const [evals, setEvals] = useState([]);
+  const [warnings, setWarnings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -31,6 +32,7 @@ export default function Evaluations() {
     try {
       const data = await listEvaluations();
       setEvals(data);
+      setWarnings(getWarnings());
     } catch {
       toast.error("No se pudieron cargar las evaluaciones");
     } finally {
@@ -97,10 +99,11 @@ export default function Evaluations() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4" data-testid="evals-list">
           {evals.map((ev) => {
+            const isProject = ev.type === "project";
             const total = ev.topics.length;
             const done = ev.topics.filter((t) => t.completed).length;
             const percent = total ? Math.round((done / total) * 100) : 0;
-            const dleft = daysBetween(todayISO(), ev.exam_date);
+            const dleft = isProject ? null : daysBetween(todayISO(), ev.exam_date);
             return (
               <div
                 key={ev.id}
@@ -113,10 +116,10 @@ export default function Evaluations() {
                     className="min-w-0 flex-1 group"
                     data-testid={`eval-link-${ev.id}`}
                   >
-                    <div className="flex items-center gap-2 text-emerald-600">
-                      <BookOpen className="w-4 h-4" />
+                    <div className={`flex items-center gap-2 ${isProject ? "text-violet-600" : "text-emerald-600"}`}>
+                      {isProject ? <Layers className="w-4 h-4" /> : <BookOpen className="w-4 h-4" />}
                       <span className="text-xs uppercase tracking-wider font-medium">
-                        {total} {total === 1 ? "tema" : "temas"}
+                        {isProject ? "Proyecto libre" : `${total} ${total === 1 ? "tema" : "temas"}`}
                       </span>
                     </div>
                     <div className="font-heading text-xl font-medium text-gray-900 mt-1 group-hover:text-emerald-700 transition-colors">
@@ -125,19 +128,25 @@ export default function Evaluations() {
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-sm text-gray-500">
                       <span className="flex items-center gap-1.5">
                         <CalendarClock className="w-4 h-4 text-gray-400" />
-                        {formatDate(ev.exam_date)}
+                        {isProject ? `${ev.weeks_goal || 4} semanas` : formatDate(ev.exam_date)}
                       </span>
-                      <span className="flex items-center gap-1.5">
-                        <Clock className="w-4 h-4 text-gray-400" />
-                        {ev.hours_per_day} h/día
-                      </span>
-                      <span className={`text-xs font-medium ${dleft < 0 ? "text-gray-400" : "text-emerald-700"}`}>
-                        {dleft < 0
-                          ? "Finalizada"
-                          : dleft === 0
-                          ? "Hoy es el examen"
-                          : `En ${dleft} ${dleft === 1 ? "día" : "días"}`}
-                      </span>
+                      {isProject ? (
+                        <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                          percent === 100
+                            ? "bg-emerald-50 text-emerald-700 border border-emerald-100"
+                            : "bg-violet-50 text-violet-700 border border-violet-100"
+                        }`}>
+                          {percent === 100 ? "Completado" : "En curso"}
+                        </span>
+                      ) : (
+                        <span className={`text-xs font-medium ${dleft < 0 ? "text-gray-400" : "text-emerald-700"}`}>
+                          {dleft < 0
+                            ? "Finalizada"
+                            : dleft === 0
+                            ? "Hoy es el examen"
+                            : `En ${dleft} ${dleft === 1 ? "día" : "días"}`}
+                        </span>
+                      )}
                     </div>
                   </Link>
                   <div className="flex gap-1 shrink-0">
@@ -165,7 +174,14 @@ export default function Evaluations() {
                   </div>
                 </div>
 
-                <div className="mt-4">
+                {warnings.some((w) => w.eval_id === ev.id) && (
+                  <div className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-2.5 py-1.5 mt-3">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    Horas insuficientes — {warnings.find((w) => w.eval_id === ev.id)?.shortfall_hours}h de déficit
+                  </div>
+                )}
+
+                <div className="mt-3">
                   <div className="flex items-center justify-between text-xs text-gray-500 mb-1.5">
                     <span>
                       {done}/{total} temas completados
