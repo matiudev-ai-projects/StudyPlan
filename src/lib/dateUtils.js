@@ -35,7 +35,7 @@ export function daysBetween(a, b) {
   return Math.round((db - da) / (1000 * 60 * 60 * 24));
 }
 
-<<<<<<< HEAD
+
 export function addDays(iso, n) {
   const d = new Date(iso + "T00:00:00");
   d.setDate(d.getDate() + n);
@@ -53,8 +53,6 @@ export function dateRange(start, end) {
   return days;
 }
 
-=======
->>>>>>> 02547a7218896d9ef0572b5552808aca08daff6b
 export function formatMinutes(mins) {
   if (mins < 60) return `${mins} min`;
   const h = Math.floor(mins / 60);
