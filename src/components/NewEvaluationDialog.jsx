@@ -230,7 +230,7 @@ export default function NewEvaluationDialog({ open, onOpenChange, onSaved, exist
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {[2, 4, 6, 8, 10, 12, 16].map((w) => (
+                    {[1, 2, 4, 6, 8, 10, 12, 16].map((w) => (
                       <SelectItem key={w} value={String(w)}>
                         {w} semanas
                       </SelectItem>
